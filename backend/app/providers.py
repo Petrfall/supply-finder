@@ -37,6 +37,19 @@ def _region(req: SearchRequest) -> str:
     return req.region or req.filters.region or ""
 
 
+def _strip_json(text: str) -> str:
+    """Pull the JSON object out of a model reply that may wrap it in prose or
+    ```json fences (common when a model ignores response_format)."""
+    t = text.strip()
+    if "```" in t:
+        # take the content of the first fenced block
+        t = t.split("```", 2)[1]
+        if t.lstrip().lower().startswith("json"):
+            t = t.lstrip()[4:]
+    start, end = t.find("{"), t.rfind("}")
+    return t[start : end + 1] if start != -1 and end != -1 else t
+
+
 def _search_prompt(req: SearchRequest) -> str:
     lang_note = "Отвечай по-русски." if req.lang == "ru" else "Respond in English."
     region_clause = f" в регионе «{_region(req)}»" if _region(req) else ""
@@ -138,67 +151,79 @@ class OpenAIProvider:
         return True
 
     def find_suppliers(self, req: SearchRequest) -> list[Supplier]:
-        # Give the model the FULL pool and let it judge semantic relevance
-        # (e.g. "выпечка" → хлебопекарные ингредиенты). Pre-filtering by exact
-        # category would starve it on near-miss queries.
-        candidates = seed_for(None, None)
-        by_name = {c.name: c for c in candidates}
+        """Generate plausible suppliers for the query via the LLM.
 
-        # Send the model a compact view (name + a few signals), not the whole
-        # object. Smaller payload = faster + better format-following on a slow
-        # proxy. We only ask the model to RANK and EXPLAIN; full supplier data
-        # is merged back from our pool afterward, so contacts can't be altered.
-        compact = [
-            {
-                "name": c.name,
-                "category": c.category,
-                "region": c.region,
-                "certificates": c.certificates,
-                "min_order": c.min_order,
-            }
-            for c in candidates
-        ]
+        Most OpenAI-compatible proxies have no web-search tool, so we can't pull
+        live listings. Instead the model generates realistic supplier profiles
+        that match the query (category + region) with a full field set. Data is
+        synthetic — clearly flagged in the UI — but the pipeline (structured
+        output → scoring → comparison) is the real thing, and it works for any
+        query, not just a fixed pool.
+        """
+        kw = req.filters.keyword
+        kw_clause = f" Особенно учти товар/ключевое слово: «{kw}»." if kw else ""
 
         sys = (
-            "Ты ранжируешь поставщиков продуктов питания под запрос. "
-            "Верни СТРОГО JSON-объект без пояснений вида:\n"
-            '{"ranked": [{"name": "<точное имя из списка>", '
-            '"reason": "<1 короткое предложение, почему связаться именно с ним>"}]}\n'
-            "Оценивай релевантность по СМЫСЛУ, а не по точному совпадению слов "
-            "(например «выпечка» близко к хлебопекарным ингредиентам, «молочка» — "
-            "к молочной продукции). Порядок — от самого релевантного. "
-            "Даже если точного совпадения нет, верни минимум 3 ближайших по смыслу. "
-            "Используй только имена из списка. reason ОБЯЗАТЕЛЕН для каждого, "
-            "по-русски."
+            "Ты генерируешь правдоподобный список поставщиков продуктов питания "
+            "под запрос (страна — Россия). Это демо-данные, не реальный реестр.\n"
+            "Верни СТРОГО JSON-объект вида:\n"
+            '{"suppliers": [{'
+            '"name": str, "category": str, "description": str, '
+            '"city": str, "region": str, "delivery_regions": [str], '
+            '"website": str, "email": str, "phone": str, "source_url": str, '
+            '"min_order": str, "price_note": str, "certificates": [str], '
+            '"delivery_terms": str, "confidence": float, "reason": str'
+            "}]}\n"
+            "Дай 6 поставщиков, релевантных запросу. Если указан город/регион — "
+            "размести часть поставщиков там или с доставкой туда. Заполняй ВСЕ "
+            "поля правдоподобно (контакты в формате РФ, цены в ₽, сертификаты — "
+            "ГОСТ/ЕАЭС/ISO 22000/ХАССП и т.п.). confidence 0..1. "
+            "reason — 1 предложение, почему связаться именно с ним. "
+            "Пиши по-русски." if req.lang == "ru" else
+            "Generate a plausible list of food suppliers for the query. Demo "
+            "data, not a real registry. Return STRICT JSON "
+            '{"suppliers": [{...same fields...}]}; 6 suppliers, all fields '
+            "filled plausibly. Write in English."
         )
         user = (
-            f"Запрос: категория «{req.category}», регион «{_region(req)}».\n"
-            f"Поставщики: {json.dumps(compact, ensure_ascii=False)}"
+            f"Категория: «{req.category}». Регион: «{_region(req) or 'любой'}»."
+            + kw_clause
         )
+        messages = [
+            {"role": "system", "content": sys},
+            {"role": "user", "content": user},
+        ]
         try:
-            resp = self._client.chat.completions.create(
-                model=self._model,
-                messages=[
-                    {"role": "system", "content": sys},
-                    {"role": "user", "content": user},
-                ],
-                response_format={"type": "json_object"},
-                temperature=0.2,
-            )
-            data = json.loads(resp.choices[0].message.content or "{}")
+            text = self._complete(messages)
+            data = json.loads(_strip_json(text))
         except Exception:
             return []  # any failure → fall back to seed path in main.py
 
-        # Merge ranking+reason back onto the full supplier records from our pool.
         out: list[Supplier] = []
-        for item in data.get("ranked", []):
-            base = by_name.get((item or {}).get("name", ""))
-            if not base:
-                continue
-            s = base.model_copy()
-            s.reason = (item.get("reason") or "").strip() or None
-            out.append(s)
+        for item in data.get("suppliers", []):
+            try:
+                out.append(Supplier(**item))
+            except Exception:
+                continue  # skip malformed entries, keep the rest
         return out
+
+    def _complete(self, messages: list[dict]) -> str:
+        """Call chat.completions; not every proxied model accepts
+        response_format=json_object, so retry without it on failure."""
+        try:
+            resp = self._client.chat.completions.create(
+                model=self._model,
+                messages=messages,
+                response_format={"type": "json_object"},
+                temperature=0.5,
+            )
+        except Exception:
+            resp = self._client.chat.completions.create(
+                model=self._model,
+                messages=messages,
+                temperature=0.5,
+            )
+        return resp.choices[0].message.content or "{}"
 
 
 def get_provider() -> Provider:
