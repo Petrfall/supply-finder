@@ -1,0 +1,18 @@
+services:
+  backend:
+    build: ./backend
+    environment:
+      # Optional: set to enable live web-search + LLM extraction.
+      # Without it, the service runs in demo mode off the seed dataset.
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    volumes:
+      - ./backend/data:/app/data
+    ports:
+      - "8000:8000"
+
+  frontend:
+    build: ./frontend
+    depends_on:
+      - backend
+    ports:
+      - "8080:80"

@@ -1,0 +1,29 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-ink text-text font-sans antialiased;
+  }
+}
+
+@layer components {
+  .container-c {
+    @apply mx-auto max-w-content px-4 sm:px-6;
+  }
+  .card {
+    @apply rounded-xl border border-line bg-panel;
+  }
+  .input {
+    @apply w-full rounded-lg border border-line bg-panel2 px-3 py-2 text-sm text-text placeholder:text-muted focus:border-brand2 focus:outline-none;
+  }
+  .btn {
+    @apply rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-brand/90 disabled:opacity-50;
+  }
+  .chip {
+    @apply inline-flex items-center rounded-md border border-line bg-panel2 px-2 py-0.5 text-xs text-muted;
+  }
+}
