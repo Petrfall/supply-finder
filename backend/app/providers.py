@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Protocol
 
 from .models import SearchRequest, Supplier
@@ -35,6 +36,24 @@ class Provider(Protocol):
 
 def _region(req: SearchRequest) -> str:
     return req.region or req.filters.region or ""
+
+
+# Lone UTF-16 surrogates (high without low, or low without high). Web-scraped
+# content fed back into a request body produces these, and the Anthropic API
+# rejects the JSON with "invalid high surrogate in string". Strip before send.
+_LONE_SURROGATE = re.compile(
+    r"[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]"
+)
+
+# Cap on the web-search digest we forward to the extractor. The model only needs
+# enough text to pull ~6-10 suppliers; multi-MB blobs just waste tokens (and were
+# the source of the 4.5 MB request that triggered the surrogate error).
+_MAX_DIGEST_CHARS = 200_000
+
+
+def _clean(text: str) -> str:
+    """Remove lone surrogates so the value serializes to valid JSON."""
+    return _LONE_SURROGATE.sub("", text)
 
 
 def _strip_json(text: str) -> str:
@@ -97,35 +116,57 @@ class AnthropicProvider:
             tools=[{"type": "web_search_20260209", "name": "web_search"}],
             messages=[{"role": "user", "content": _search_prompt(req)}],
         )
-        return "".join(
+        digest = "".join(
             b.text for b in resp.content if getattr(b, "type", None) == "text"
         )
+        # Sanitize + bound before this text becomes the body of the next request.
+        return _clean(digest)[:_MAX_DIGEST_CHARS]
 
     # Step 2 — structured extraction into Supplier[]
+    #
+    # We ask for a plain-text JSON object rather than using messages.parse() with
+    # output_format=SupplierList: the structured-output engine compiles a grammar
+    # from the JSON Schema, and the Supplier schema (nested SourceRef list, many
+    # optionals) is complex enough to hit "Grammar compilation timed out" (400).
+    # A JSON instruction + tolerant parse avoids the grammar step entirely and
+    # mirrors how OpenAIProvider parses its output.
     def _extract(self, digest: str, req: SearchRequest) -> list[Supplier]:
-        from pydantic import BaseModel
-
-        class SupplierList(BaseModel):
-            suppliers: list[Supplier]
-
-        resp = self._client.messages.parse(
+        resp = self._client.messages.create(
             model=ANTHROPIC_MODEL,
             max_tokens=8000,
             messages=[
                 {
                     "role": "user",
                     "content": (
-                        "Извлеки поставщиков из текста ниже в структуру. "
-                        "Не выдумывай данные: если поля нет — оставь пустым. "
-                        "confidence — насколько ты уверен, что это реальная "
-                        "релевантная компания (0..1).\n\n" + digest
+                        "Извлеки поставщиков из текста ниже. Верни СТРОГО один "
+                        "JSON-объект вида {\"suppliers\": [ ... ]}, где каждый "
+                        "элемент содержит поля: name, category, description, city, "
+                        "region, delivery_regions (массив строк), website, email, "
+                        "phone, source_url, min_order, price_note, certificates "
+                        "(массив строк), delivery_terms, confidence (число 0..1), "
+                        "reason. Не выдумывай данные: если поля нет — оставь пустым "
+                        "(\"\" или []). confidence — насколько ты уверен, что это "
+                        "реальная релевантная компания. Без пояснений вне JSON.\n\n"
+                        + digest
                     ),
                 }
             ],
-            output_format=SupplierList,
         )
-        parsed = resp.parsed_output
-        return parsed.suppliers if parsed else []
+        text = "".join(
+            b.text for b in resp.content if getattr(b, "type", None) == "text"
+        )
+        try:
+            data = json.loads(_strip_json(text))
+        except Exception:
+            return []
+
+        out: list[Supplier] = []
+        for item in data.get("suppliers", []):
+            try:
+                out.append(Supplier(**item))
+            except Exception:
+                continue  # skip malformed entries, keep the rest
+        return out
 
 
 class OpenAIProvider:
