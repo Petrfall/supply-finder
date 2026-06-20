@@ -8,6 +8,8 @@ interface Props {
   region: string | null;
   inCompare: boolean;
   onToggleCompare: () => void;
+  isSaved: boolean;
+  onToggleSave: () => void;
 }
 
 function scoreColor(score: number): string {
@@ -28,14 +30,27 @@ const MAX_WEIGHTS: Record<string, number> = {
 };
 const ORDER = Object.keys(MAX_WEIGHTS);
 
-export function SupplierCard({ s, lang, rank, region, inCompare, onToggleCompare }: Props) {
+export function SupplierCard({
+  s, lang, rank, region, inCompare, onToggleCompare, isSaved, onToggleSave,
+}: Props) {
   const tr = t[lang];
   const contacts = [s.email, s.phone].filter(Boolean);
   const reason = s.reason || (rank === 0 ? tr.whyAuto(region) : null);
 
   return (
-    <article className="card flex flex-col p-5">
-      <div className="flex items-start justify-between gap-3">
+    <article className="card relative flex flex-col p-5">
+      <button
+        type="button"
+        onClick={onToggleSave}
+        aria-label={isSaved ? tr.remove : tr.save}
+        title={isSaved ? tr.saved : tr.save}
+        className={`absolute right-3 top-3 text-lg leading-none transition-transform hover:scale-110 ${
+          isSaved ? "text-red-400" : "text-muted hover:text-red-400"
+        }`}
+      >
+        {isSaved ? "♥" : "♡"}
+      </button>
+      <div className="flex items-start justify-between gap-3 pr-6">
         <div>
           <h3 className="text-base font-bold text-white">{s.name}</h3>
           <p className="mt-0.5 text-xs text-muted">

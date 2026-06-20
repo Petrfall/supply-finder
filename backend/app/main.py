@@ -10,12 +10,13 @@ off the seed dataset, so the prototype opens and runs for anyone.
 """
 from __future__ import annotations
 
-import uuid
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
-from . import cache
+from . import cache, store
 from .dedup import dedupe
 from .models import ScoredSupplier, SearchRequest, SearchResponse
 from .providers import get_provider
@@ -123,3 +124,53 @@ def _summary(suppliers: list[ScoredSupplier], req: SearchRequest) -> str:
     if req.region:
         bits.append(f"Учтён регион «{req.region}».")
     return " ".join(bits)
+
+
+# ---------------------------------------------------------------------------
+# Per-client storage: saved suppliers + message presets.
+# client_id is an opaque id the browser generates — a registration-free "LK".
+# ---------------------------------------------------------------------------
+
+
+class SaveSupplierBody(BaseModel):
+    client_id: str
+    supplier: ScoredSupplier
+
+
+class PresetBody(BaseModel):
+    client_id: str
+    preset: dict[str, Any]  # { name, fields: [...], template, ... } — UI-defined
+
+
+@app.get("/api/saved")
+def get_saved(client_id: str) -> list[dict]:
+    return store.list_saved(client_id)
+
+
+@app.post("/api/saved")
+def post_saved(body: SaveSupplierBody) -> dict:
+    store.save_supplier(body.client_id, body.supplier.model_dump())
+    return {"ok": True}
+
+
+@app.delete("/api/saved")
+def del_saved(client_id: str, name: str) -> dict:
+    store.delete_saved(client_id, name)
+    return {"ok": True}
+
+
+@app.get("/api/presets")
+def get_presets(client_id: str) -> list[dict]:
+    return store.list_presets(client_id)
+
+
+@app.post("/api/presets")
+def post_preset(body: PresetBody) -> dict:
+    store.save_preset(body.client_id, body.preset)
+    return {"ok": True}
+
+
+@app.delete("/api/presets")
+def del_preset(client_id: str, name: str) -> dict:
+    store.delete_preset(client_id, name)
+    return {"ok": True}
