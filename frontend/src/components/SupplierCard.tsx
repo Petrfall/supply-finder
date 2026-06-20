@@ -10,6 +10,9 @@ interface Props {
   onToggleCompare: () => void;
   isSaved: boolean;
   onToggleSave: () => void;
+  /** When set, clicking the card body calls this (used in the Saved tab to
+   *  fill the message builder). Buttons stop propagation so they still work. */
+  onClickBody?: () => void;
 }
 
 function scoreColor(score: number): string {
@@ -31,17 +34,30 @@ const MAX_WEIGHTS: Record<string, number> = {
 const ORDER = Object.keys(MAX_WEIGHTS);
 
 export function SupplierCard({
-  s, lang, rank, region, inCompare, onToggleCompare, isSaved, onToggleSave,
+  s, lang, rank, region, inCompare, onToggleCompare, isSaved, onToggleSave, onClickBody,
 }: Props) {
   const tr = t[lang];
   const contacts = [s.email, s.phone].filter(Boolean);
   const reason = s.reason || (rank === 0 ? tr.whyAuto(region) : null);
+  const clickable = !!onClickBody;
+
+  // Only the textual body triggers fill; interactive controls stop propagation.
+  const stop = (e: React.MouseEvent) => e.stopPropagation();
 
   return (
-    <article className="card relative flex flex-col p-5">
+    <article
+      className={`card relative flex flex-col p-5 ${
+        clickable ? "cursor-pointer transition-colors hover:border-brand2/50" : ""
+      }`}
+      onClick={onClickBody}
+      title={clickable ? tr.clickToFill : undefined}
+    >
       <button
         type="button"
-        onClick={onToggleSave}
+        onClick={(e) => {
+          stop(e);
+          onToggleSave();
+        }}
         aria-label={isSaved ? tr.remove : tr.save}
         title={isSaved ? tr.saved : tr.save}
         className={`absolute right-3 top-3 text-lg leading-none transition-transform hover:scale-110 ${
@@ -103,6 +119,7 @@ export function SupplierCard({
                 href={s.website.startsWith("http") ? s.website : `https://${s.website}`}
                 target="_blank"
                 rel="noreferrer"
+                onClick={stop}
                 className="text-brand2 hover:underline"
               >
                 {s.website}
@@ -127,6 +144,7 @@ export function SupplierCard({
             href={s.source_url}
             target="_blank"
             rel="noreferrer"
+            onClick={stop}
             className="text-xs text-muted hover:text-text"
           >
             {tr.source} ↗
@@ -135,7 +153,10 @@ export function SupplierCard({
           <span />
         )}
         <button
-          onClick={onToggleCompare}
+          onClick={(e) => {
+            stop(e);
+            onToggleCompare();
+          }}
           className={`rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
             inCompare
               ? "border-brand2 bg-brand2/15 text-brand2"
@@ -167,6 +188,7 @@ function ScoreInfo({ s, lang }: { s: ScoredSupplier; lang: Lang }) {
       <button
         type="button"
         aria-label={tr.breakdown}
+        onClick={(e) => e.stopPropagation()}
         className="flex h-4 w-4 items-center justify-center rounded-full border border-line text-[10px] font-bold text-muted hover:border-brand2 hover:text-brand2"
       >
         i

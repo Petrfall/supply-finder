@@ -10,19 +10,23 @@ import type { ScoredSupplier } from "../lib/types";
 
 type Field = MessagePreset["fields"][number];
 
+// Keys we treat as "about the supplier" — filled when a saved card is clicked.
+const SUPPLIER_KEY = new Set(["поставщик", "supplier"]);
+const ITEM_KEY = new Set(["товар", "item"]);
+
 function defaultFields(lang: Lang): Field[] {
   return lang === "ru"
     ? [
-        { key: "поставщик", label: "Поставщик", value: "", required: false },
-        { key: "товар", label: "Товар", value: "", required: true },
-        { key: "объём", label: "Нужный объём", value: "", required: false },
-        { key: "компания", label: "Моя компания", value: "", required: false },
+        { key: "поставщик", label: "Поставщик", value: "" },
+        { key: "товар", label: "Товар", value: "" },
+        { key: "объём", label: "Нужный объём", value: "" },
+        { key: "компания", label: "Моя компания", value: "" },
       ]
     : [
-        { key: "supplier", label: "Supplier", value: "", required: false },
-        { key: "item", label: "Item", value: "", required: true },
-        { key: "volume", label: "Volume needed", value: "", required: false },
-        { key: "company", label: "My company", value: "", required: false },
+        { key: "supplier", label: "Supplier", value: "" },
+        { key: "item", label: "Item", value: "" },
+        { key: "volume", label: "Volume needed", value: "" },
+        { key: "company", label: "My company", value: "" },
       ];
 }
 
@@ -33,23 +37,21 @@ function defaultTemplate(lang: Lang): string {
     : "Hello, {supplier}!\n\nDo you have {item} available? We're interested in {volume}.\n\nBest regards, {company}.";
 }
 
-/** Substitute {key} tokens; drop sentences whose only filled token is missing
- * is overkill — instead just blank missing tokens and tidy double spaces. */
 function render(template: string, fields: Field[]): string {
   let out = template;
-  for (const f of fields) {
-    out = out.replaceAll(`{${f.key}}`, f.value || "");
-  }
+  for (const f of fields) out = out.replaceAll(`{${f.key}}`, f.value || "");
   return out.replace(/[ \t]{2,}/g, " ").replace(/ +\n/g, "\n").trim();
 }
 
 interface Props {
   lang: Lang;
-  /** When opened from a saved supplier, prefill the "supplier" field. */
-  prefillSupplier?: ScoredSupplier | null;
+  /** Supplier clicked in the Saved tab — fills only supplier/item fields. */
+  fillFrom?: ScoredSupplier | null;
+  /** Bumped on each click so identical re-clicks still trigger the effect. */
+  fillNonce?: number;
 }
 
-export function MessageBuilder({ lang, prefillSupplier }: Props) {
+export function MessageBuilder({ lang, fillFrom, fillNonce }: Props) {
   const tr = t[lang];
   const [fields, setFields] = useState<Field[]>(() => defaultFields(lang));
   const [template, setTemplate] = useState<string>(() => defaultTemplate(lang));
@@ -61,17 +63,19 @@ export function MessageBuilder({ lang, prefillSupplier }: Props) {
     listPresets().then(setPresets).catch(() => {});
   }, []);
 
-  // Prefill the supplier-name field when launched from a saved card.
+  // Fill supplier-related fields from a clicked saved card.
   useEffect(() => {
-    if (!prefillSupplier) return;
+    if (!fillFrom) return;
+    const item = fillFrom.category || "";
     setFields((prev) =>
-      prev.map((f) =>
-        f.key === "поставщик" || f.key === "supplier"
-          ? { ...f, value: prefillSupplier.name }
-          : f
-      )
+      prev.map((f) => {
+        if (SUPPLIER_KEY.has(f.key)) return { ...f, value: fillFrom.name };
+        if (ITEM_KEY.has(f.key) && item) return { ...f, value: item };
+        return f;
+      })
     );
-  }, [prefillSupplier]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fillNonce]);
 
   const message = useMemo(() => render(template, fields), [template, fields]);
 
@@ -79,19 +83,19 @@ export function MessageBuilder({ lang, prefillSupplier }: Props) {
     setFields((prev) => prev.map((f, idx) => (idx === i ? { ...f, ...patch } : f)));
   }
   function addField() {
-    setFields((prev) => [
-      ...prev,
-      { key: `поле${prev.length + 1}`, label: "", value: "", required: false },
-    ]);
+    setFields((prev) => [...prev, { key: `поле${prev.length + 1}`, label: "", value: "" }]);
   }
   function removeField(i: number) {
     setFields((prev) => prev.filter((_, idx) => idx !== i));
   }
+  function clearAll() {
+    setFields(defaultFields(lang));
+    setTemplate(defaultTemplate(lang));
+  }
 
   async function onSavePreset() {
     if (!presetName.trim()) return;
-    const p: MessagePreset = { name: presetName.trim(), fields, template };
-    await savePreset(p);
+    await savePreset({ name: presetName.trim(), fields, template });
     setPresets(await listPresets());
     setPresetName("");
   }
@@ -113,8 +117,15 @@ export function MessageBuilder({ lang, prefillSupplier }: Props) {
 
   return (
     <section className="card p-5">
-      <h2 className="text-lg font-bold text-white">{tr.msgBuilder}</h2>
-      <p className="mt-1 text-xs text-muted">{tr.msgHint}</p>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-bold text-white">{tr.msgBuilder}</h2>
+          <p className="mt-1 text-xs text-muted">{tr.msgHint}</p>
+        </div>
+        <button onClick={clearAll} className="text-xs text-muted hover:text-text">
+          {tr.clearBuilder}
+        </button>
+      </div>
 
       <div className="mt-4 grid gap-5 lg:grid-cols-2">
         {/* Left: field constructor + template */}
@@ -123,7 +134,7 @@ export function MessageBuilder({ lang, prefillSupplier }: Props) {
             {fields.map((f, i) => (
               <div key={i} className="flex items-center gap-2">
                 <input
-                  className="input w-24 font-mono text-xs"
+                  className="input w-28 font-mono text-xs"
                   value={f.key}
                   onChange={(e) => setField(i, { key: e.target.value })}
                   placeholder={tr.fieldKey}
@@ -134,15 +145,6 @@ export function MessageBuilder({ lang, prefillSupplier }: Props) {
                   onChange={(e) => setField(i, { value: e.target.value })}
                   placeholder={f.label || tr.fieldValue}
                 />
-                <label className="flex items-center gap-1 text-[11px] text-muted">
-                  <input
-                    type="checkbox"
-                    className="h-3.5 w-3.5 accent-brand"
-                    checked={f.required}
-                    onChange={(e) => setField(i, { required: e.target.checked })}
-                  />
-                  {tr.required}
-                </label>
                 <button
                   onClick={() => removeField(i)}
                   className="text-muted hover:text-red-400"
@@ -166,7 +168,6 @@ export function MessageBuilder({ lang, prefillSupplier }: Props) {
             />
           </label>
 
-          {/* Presets */}
           <div className="mt-4 flex items-center gap-2">
             <input
               className="input flex-1"

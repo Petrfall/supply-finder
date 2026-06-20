@@ -64,7 +64,7 @@ export async function deleteSaved(name: string): Promise<void> {
 
 export interface MessagePreset {
   name: string;
-  fields: { key: string; label: string; value: string; required: boolean }[];
+  fields: { key: string; label: string; value: string }[];
   template: string;
 }
 

@@ -47,6 +47,14 @@ export default function App() {
   const [saved, setSaved] = useState<ScoredSupplier[]>([]);
   const savedNames = new Set(saved.map((s) => s.name));
 
+  // Click a saved card → fill the message builder. Nonce lets re-clicks retrigger.
+  const [fillFrom, setFillFrom] = useState<ScoredSupplier | null>(null);
+  const [fillNonce, setFillNonce] = useState(0);
+  function fillBuilder(s: ScoredSupplier) {
+    setFillFrom(s);
+    setFillNonce((n) => n + 1);
+  }
+
   useEffect(() => {
     document.title = tr.title;
     document.documentElement.lang = lang;
@@ -297,14 +305,18 @@ export default function App() {
                     onToggleCompare={() => toggleCompare(s)}
                     isSaved
                     onToggleSave={() => toggleSave(s)}
+                    onClickBody={() => fillBuilder(s)}
                   />
                 ))}
               </div>
             )}
 
             <div className="mt-8">
-              <MessageBuilder lang={lang} prefillSupplier={saved[0] ?? null} />
+              <MessageBuilder lang={lang} fillFrom={fillFrom} fillNonce={fillNonce} />
             </div>
+
+            {/* Comparison appears under the builder in the Saved tab. */}
+            <ComparisonTable items={compare} lang={lang} onClear={() => setCompare([])} />
           </>
         )}
       </main>
