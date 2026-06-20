@@ -5,13 +5,21 @@ import type { SearchRequest, SearchResponse } from "./types";
 const BASE = import.meta.env.VITE_API_BASE ?? "";
 
 export async function search(req: SearchRequest): Promise<SearchResponse> {
-  const r = await fetch(`${BASE}/api/search`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(req),
-  });
-  if (!r.ok) throw new Error(`Search failed: ${r.status}`);
-  return r.json();
+  // Live LLM calls (esp. via a slow proxy) can take a while — allow up to 120s.
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 120_000);
+  try {
+    const r = await fetch(`${BASE}/api/search`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+      signal: ctrl.signal,
+    });
+    if (!r.ok) throw new Error(`Search failed: ${r.status}`);
+    return r.json();
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export async function health(): Promise<{ status: string; live: boolean }> {

@@ -62,14 +62,16 @@ class Supplier(BaseModel):
     notes: Optional[str] = None
     sources: list[SourceRef] = Field(default_factory=list)
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    # Short, LLM-written "why contact this one". On the base model so it survives
+    # extraction → scoring (a provider may set it before the score is computed).
+    reason: Optional[str] = None
 
 
 class ScoredSupplier(Supplier):
-    """A supplier enriched with a deterministic fit score and a reason."""
+    """A supplier enriched with a deterministic fit score."""
 
     score: int = 0  # 0..100
     score_breakdown: dict[str, int] = Field(default_factory=dict)
-    reason: Optional[str] = None  # short, LLM-written "why contact this one"
 
 
 class SearchFilters(BaseModel):

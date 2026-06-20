@@ -2,9 +2,12 @@ services:
   backend:
     build: ./backend
     environment:
-      # Optional: set to enable live web-search + LLM extraction.
-      # Without it, the service runs in demo mode off the seed dataset.
+      # Optional keys to enable live mode. Without any, the service runs in
+      # demo mode off the seed dataset. Anthropic takes priority if both set.
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o}
     volumes:
       - ./backend/data:/app/data
     ports:

@@ -1,28 +1,28 @@
 """LLM provider abstraction.
 
-Two implementations behind one interface:
-  - AnthropicProvider: real web search + structured extraction via the Anthropic API.
+Three implementations behind one interface:
+  - AnthropicProvider: real web search + structured extraction (native web tool).
+  - OpenAIProvider: OpenAI-compatible endpoint (e.g. an apinet.cloud proxy with
+    gpt-4o). No built-in web search on most proxies, so it works over the seed
+    candidate pool: the model filters, enriches, ranks, and writes a per-supplier
+    reason — a live demo of the LLM pipeline with a widely-available key.
   - MockProvider: returns nothing live; the service falls back to cache/seed.
 
-The split keeps the service runnable with no API key (the demo path) while the
-same code path serves live results when ANTHROPIC_API_KEY is set. This mirrors
-the provider pattern from the resume-scorer project.
+The split keeps the service runnable with no key (demo) while serving live
+results when a key is set. Same provider pattern as the resume-scorer project.
 
-Why a two-step pipeline (search, then extract) rather than one call:
-the Anthropic web-search tool and structured output (output_config.format)
-cannot be combined in a single request. So step 1 runs web search and lets the
-model write a plain-text digest of the suppliers it found; step 2 is a separate
-structured call that parses that digest into the Supplier schema. Code — not the
-model — then scores and ranks.
+Selection order in get_provider(): Anthropic key → OpenAI-compatible key → mock.
 """
 from __future__ import annotations
 
+import json
 import os
 from typing import Protocol
 
 from .models import SearchRequest, Supplier
+from .seed import seed_for
 
-MODEL = "claude-opus-4-8"
+ANTHROPIC_MODEL = "claude-opus-4-8"
 
 
 class Provider(Protocol):
@@ -33,12 +33,13 @@ class Provider(Protocol):
         ...
 
 
+def _region(req: SearchRequest) -> str:
+    return req.region or req.filters.region or ""
+
+
 def _search_prompt(req: SearchRequest) -> str:
-    region = req.region or req.filters.region or ""
-    lang_note = (
-        "Отвечай по-русски." if req.lang == "ru" else "Respond in English."
-    )
-    region_clause = f" в регионе «{region}»" if region else ""
+    lang_note = "Отвечай по-русски." if req.lang == "ru" else "Respond in English."
+    region_clause = f" в регионе «{_region(req)}»" if _region(req) else ""
     return (
         f"Найди реальных поставщиков по категории «{req.category}»{region_clause} "
         f"(food-направление: ингредиенты, готовая продукция, упаковка и т.п.). "
@@ -61,7 +62,7 @@ class MockProvider:
 
 class AnthropicProvider:
     def __init__(self, api_key: str):
-        import anthropic  # imported lazily so the package is optional
+        import anthropic  # lazy import — package optional
 
         self._client = anthropic.Anthropic(api_key=api_key)
 
@@ -77,7 +78,7 @@ class AnthropicProvider:
     # Step 1 — web search → plain-text digest
     def _web_search(self, req: SearchRequest) -> str:
         resp = self._client.messages.create(
-            model=MODEL,
+            model=ANTHROPIC_MODEL,
             max_tokens=8000,
             thinking={"type": "adaptive"},
             tools=[{"type": "web_search_20260209", "name": "web_search"}],
@@ -95,7 +96,7 @@ class AnthropicProvider:
             suppliers: list[Supplier]
 
         resp = self._client.messages.parse(
-            model=MODEL,
+            model=ANTHROPIC_MODEL,
             max_tokens=8000,
             messages=[
                 {
@@ -103,7 +104,7 @@ class AnthropicProvider:
                     "content": (
                         "Извлеки поставщиков из текста ниже в структуру. "
                         "Не выдумывай данные: если поля нет — оставь пустым. "
-                        "Поле confidence — насколько ты уверен, что это реальная "
+                        "confidence — насколько ты уверен, что это реальная "
                         "релевантная компания (0..1).\n\n" + digest
                     ),
                 }
@@ -114,12 +115,100 @@ class AnthropicProvider:
         return parsed.suppliers if parsed else []
 
 
+class OpenAIProvider:
+    """OpenAI-compatible endpoint (proxy such as apinet.cloud, model gpt-4o).
+
+    Most OpenAI-compatible proxies don't expose a web-search tool, so we don't
+    fake one. The model reasons over the seed candidate pool: it picks the
+    relevant suppliers for the query, normalizes them, and writes a short
+    `reason` per supplier. Output is constrained to JSON (response_format).
+    """
+
+    def __init__(self, api_key: str, base_url: str, model: str):
+        from openai import OpenAI  # lazy import
+
+        # Bounded timeout + one retry: if the upstream model is slow/overloaded,
+        # fail fast so main.py falls back to the seed path instead of hanging.
+        self._client = OpenAI(
+            api_key=api_key, base_url=base_url, timeout=90.0, max_retries=1
+        )
+        self._model = model
+
+    def is_live(self) -> bool:
+        return True
+
+    def find_suppliers(self, req: SearchRequest) -> list[Supplier]:
+        candidates = seed_for(req.category, _region(req))
+        by_name = {c.name: c for c in candidates}
+
+        # Send the model a compact view (name + a few signals), not the whole
+        # object. Smaller payload = faster + better format-following on a slow
+        # proxy. We only ask the model to RANK and EXPLAIN; full supplier data
+        # is merged back from our pool afterward, so contacts can't be altered.
+        compact = [
+            {
+                "name": c.name,
+                "category": c.category,
+                "region": c.region,
+                "certificates": c.certificates,
+                "min_order": c.min_order,
+            }
+            for c in candidates
+        ]
+
+        sys = (
+            "Ты ранжируешь поставщиков продуктов питания под запрос. "
+            "Верни СТРОГО JSON-объект без пояснений вида:\n"
+            '{"ranked": [{"name": "<точное имя из списка>", '
+            '"reason": "<1 короткое предложение, почему связаться именно с ним>"}]}\n'
+            "Порядок — от самого релевантного. Используй только имена из списка. "
+            "Поле reason ОБЯЗАТЕЛЬНО для каждого. Пиши reason по-русски."
+        )
+        user = (
+            f"Запрос: категория «{req.category}», регион «{_region(req)}».\n"
+            f"Поставщики: {json.dumps(compact, ensure_ascii=False)}"
+        )
+        try:
+            resp = self._client.chat.completions.create(
+                model=self._model,
+                messages=[
+                    {"role": "system", "content": sys},
+                    {"role": "user", "content": user},
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.2,
+            )
+            data = json.loads(resp.choices[0].message.content or "{}")
+        except Exception:
+            return []  # any failure → fall back to seed path in main.py
+
+        # Merge ranking+reason back onto the full supplier records from our pool.
+        out: list[Supplier] = []
+        for item in data.get("ranked", []):
+            base = by_name.get((item or {}).get("name", ""))
+            if not base:
+                continue
+            s = base.model_copy()
+            s.reason = (item.get("reason") or "").strip() or None
+            out.append(s)
+        return out
+
+
 def get_provider() -> Provider:
-    key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-    if not key:
-        return MockProvider()
-    try:
-        return AnthropicProvider(key)
-    except Exception:
-        # anthropic package missing or client init failed — degrade gracefully
-        return MockProvider()
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if anthropic_key:
+        try:
+            return AnthropicProvider(anthropic_key)
+        except Exception:
+            pass
+
+    openai_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if openai_key:
+        base_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").strip()
+        model = os.environ.get("OPENAI_MODEL", "gpt-4o").strip()
+        try:
+            return OpenAIProvider(openai_key, base_url, model)
+        except Exception:
+            pass
+
+    return MockProvider()
