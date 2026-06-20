@@ -16,6 +16,18 @@ function scoreColor(score: number): string {
   return "text-muted";
 }
 
+// Max points per signal — mirrors WEIGHTS in backend/app/scoring.py.
+const MAX_WEIGHTS: Record<string, number> = {
+  region_match: 30,
+  category_match: 15,
+  has_contacts: 15,
+  certificates: 15,
+  min_order: 10,
+  price_known: 8,
+  delivery_terms: 7,
+};
+const ORDER = Object.keys(MAX_WEIGHTS);
+
 export function SupplierCard({ s, lang, rank, region, inCompare, onToggleCompare }: Props) {
   const tr = t[lang];
   const contacts = [s.email, s.phone].filter(Boolean);
@@ -34,7 +46,12 @@ export function SupplierCard({ s, lang, rank, region, inCompare, onToggleCompare
           <div className={`font-mono text-2xl font-bold ${scoreColor(s.score)}`}>
             {s.score}
           </div>
-          <div className="text-[10px] uppercase tracking-wide text-muted">{tr.score}</div>
+          <div className="flex items-center justify-end gap-1">
+            <span className="text-[10px] uppercase tracking-wide text-muted">
+              {tr.score}
+            </span>
+            <ScoreInfo s={s} lang={lang} />
+          </div>
         </div>
       </div>
 
@@ -123,5 +140,51 @@ function Field({ label, value }: { label: string; value: string }) {
       <dt className="text-[11px] uppercase tracking-wide text-muted">{label}</dt>
       <dd className="text-text/90">{value}</dd>
     </div>
+  );
+}
+
+/** "i" badge that reveals the score breakdown on hover/focus. */
+function ScoreInfo({ s, lang }: { s: ScoredSupplier; lang: Lang }) {
+  const tr = t[lang];
+  const labels = tr.breakdownLabels;
+  return (
+    <span className="group relative inline-flex">
+      <button
+        type="button"
+        aria-label={tr.breakdown}
+        className="flex h-4 w-4 items-center justify-center rounded-full border border-line text-[10px] font-bold text-muted hover:border-brand2 hover:text-brand2"
+      >
+        i
+      </button>
+      <div className="invisible absolute right-0 top-5 z-20 w-60 rounded-lg border border-line bg-panel2 p-3 text-left opacity-0 shadow-xl transition-opacity group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100">
+        <div className="mb-2 text-xs font-semibold text-white">{tr.breakdown}</div>
+        <ul className="space-y-1.5">
+          {ORDER.map((key) => {
+            const got = s.score_breakdown[key] ?? 0;
+            const max = MAX_WEIGHTS[key];
+            const pct = max ? (got / max) * 100 : 0;
+            return (
+              <li key={key} className="text-[11px]">
+                <div className="flex items-center justify-between">
+                  <span className="text-muted">{labels[key] ?? key}</span>
+                  <span className="font-mono text-text/90">
+                    {got} {tr.ofMax} {max}
+                  </span>
+                </div>
+                <div className="mt-0.5 h-1 w-full overflow-hidden rounded bg-line">
+                  <div
+                    className={pct >= 60 ? "h-full bg-brand" : pct > 0 ? "h-full bg-amber" : "h-full"}
+                    style={{ width: `${pct}%` }}
+                  />
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+        <div className="mt-2 border-t border-line/60 pt-2 text-[11px] text-muted">
+          {tr.confidence}: {Math.round(s.confidence * 100)}%
+        </div>
+      </div>
+    </span>
   );
 }

@@ -40,6 +40,16 @@ export const t = {
     name: "Название",
     confidence: "Уверенность извлечения",
     breakdown: "Из чего складывается оценка",
+    breakdownLabels: {
+      region_match: "Совпадение региона",
+      category_match: "Совпадение категории",
+      has_contacts: "Есть контакты",
+      certificates: "Сертификаты",
+      min_order: "Известен мин. заказ",
+      price_known: "Известна цена",
+      delivery_terms: "Условия доставки",
+    } as Record<string, string>,
+    ofMax: "из",
     presets: "Быстрый старт:",
   },
   en: {
@@ -81,6 +91,16 @@ export const t = {
     name: "Name",
     confidence: "Extraction confidence",
     breakdown: "Score breakdown",
+    breakdownLabels: {
+      region_match: "Region match",
+      category_match: "Category match",
+      has_contacts: "Has contacts",
+      certificates: "Certificates",
+      min_order: "Min order known",
+      price_known: "Price known",
+      delivery_terms: "Delivery terms",
+    } as Record<string, string>,
+    ofMax: "of",
     presets: "Quick start:",
   },
 } as const;

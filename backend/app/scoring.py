@@ -26,12 +26,23 @@ def _region_match(s: Supplier, region: str | None) -> int:
     if not region:
         return WEIGHTS["region_match"]  # no preference → don't penalize anyone
     region_l = region.strip().lower()
-    haystack = [s.region, s.city, *s.delivery_regions]
-    for h in haystack:
+
+    # Direct hit: the requested place appears in the supplier's location or
+    # delivery regions. A city the user typed (e.g. "Зеленокумск") sits *inside*
+    # a region ("Ставропольский край"), so we also scan the free-text delivery
+    # terms and description, where "доставка в <город>" usually lives.
+    direct = [s.region, s.city, *s.delivery_regions]
+    for h in direct:
         if h and region_l in h.lower():
             return WEIGHTS["region_match"]
+
+    text = f"{s.delivery_terms or ''} {s.description or ''}".lower()
+    if region_l in text:
+        # covered via delivery, not the home base → strong but not full
+        return int(WEIGHTS["region_match"] * 0.8)
+
     # "delivers across Russia" style note still counts, partially
-    if any(h and ("росс" in h.lower() or "russia" in h.lower()) for h in haystack):
+    if any(h and ("росс" in h.lower() or "russia" in h.lower()) for h in direct):
         return int(WEIGHTS["region_match"] * 0.6)
     return 0
 
