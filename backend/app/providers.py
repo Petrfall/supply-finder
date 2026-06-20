@@ -138,7 +138,10 @@ class OpenAIProvider:
         return True
 
     def find_suppliers(self, req: SearchRequest) -> list[Supplier]:
-        candidates = seed_for(req.category, _region(req))
+        # Give the model the FULL pool and let it judge semantic relevance
+        # (e.g. "выпечка" → хлебопекарные ингредиенты). Pre-filtering by exact
+        # category would starve it on near-miss queries.
+        candidates = seed_for(None, None)
         by_name = {c.name: c for c in candidates}
 
         # Send the model a compact view (name + a few signals), not the whole
@@ -161,8 +164,12 @@ class OpenAIProvider:
             "Верни СТРОГО JSON-объект без пояснений вида:\n"
             '{"ranked": [{"name": "<точное имя из списка>", '
             '"reason": "<1 короткое предложение, почему связаться именно с ним>"}]}\n'
-            "Порядок — от самого релевантного. Используй только имена из списка. "
-            "Поле reason ОБЯЗАТЕЛЬНО для каждого. Пиши reason по-русски."
+            "Оценивай релевантность по СМЫСЛУ, а не по точному совпадению слов "
+            "(например «выпечка» близко к хлебопекарным ингредиентам, «молочка» — "
+            "к молочной продукции). Порядок — от самого релевантного. "
+            "Даже если точного совпадения нет, верни минимум 3 ближайших по смыслу. "
+            "Используй только имена из списка. reason ОБЯЗАТЕЛЕН для каждого, "
+            "по-русски."
         )
         user = (
             f"Запрос: категория «{req.category}», регион «{_region(req)}».\n"
