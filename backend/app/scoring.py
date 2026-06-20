@@ -49,10 +49,21 @@ def _region_match(s: Supplier, region: str | None) -> int:
 
 def _category_match(s: Supplier, category: str) -> int:
     if not category:
-        return 0
+        return WEIGHTS["category_match"]
     c = category.strip().lower()
-    fields = [s.category, s.description or "", s.name]
-    return WEIGHTS["category_match"] if any(c in f.lower() for f in fields) else 0
+    fields = [s.category or "", s.description or "", s.name]
+    # Direct substring hit on any descriptive field → full points.
+    if any(c in f.lower() for f in fields):
+        return WEIGHTS["category_match"]
+    # Word-overlap fallback: "напиток" vs a supplier described as "лимонад,
+    # квас, соки" — share a stem? Give full points. Catches synonyms the exact
+    # match misses without a taxonomy.
+    cat_words = {w for w in c.replace(",", " ").split() if len(w) > 3}
+    blob = " ".join(fields).lower()
+    if any(w[:5] in blob for w in cat_words):
+        return WEIGHTS["category_match"]
+    # The supplier was returned for this query at all → partial relevance.
+    return int(WEIGHTS["category_match"] * 0.5)
 
 
 def score_supplier(s: Supplier, req: SearchRequest) -> ScoredSupplier:
