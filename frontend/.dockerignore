@@ -1,0 +1,14 @@
+# Keep the build context lean — these are rebuilt inside the image.
+node_modules/
+dist/
+.vite/
+
+# VCS / IDE / local cruft
+.git/
+.gitignore
+.vscode/
+.idea/
+*.log
+.env
+.env.*
+!.env.example

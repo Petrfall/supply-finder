@@ -1,0 +1,24 @@
+# Keep the build context lean.
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Runtime data + secrets never go in the image.
+data/
+*.sqlite
+*.sqlite3
+*.db
+.env
+.env.*
+!.env.example
+
+# VCS / IDE / docs
+.git/
+.gitignore
+.vscode/
+.idea/
+*.md

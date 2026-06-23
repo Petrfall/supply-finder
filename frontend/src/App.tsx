@@ -5,6 +5,8 @@ import { t, type Lang } from "./lib/i18n";
 import { SupplierCard } from "./components/SupplierCard";
 import { ComparisonTable } from "./components/ComparisonTable";
 import { MessageBuilder } from "./components/MessageBuilder";
+import { LoginPage } from "./components/LoginPage";
+import { isAuthed, logout } from "./lib/auth";
 
 const QUICK = [
   { ru: "Ингредиенты · Урал", en: "Ingredients · Ural", category: "Ингредиенты", region: "УрФО" },
@@ -30,6 +32,9 @@ export default function App() {
       (navigator.language.toLowerCase().startsWith("ru") ? "ru" : "en")
   );
   const tr = t[lang];
+
+  // Frontend-only access gate (demo). Until logged in, show the login page.
+  const [authed, setAuthed] = useState<boolean>(() => isAuthed());
 
   const [tab, setTab] = useState<Tab>("search");
 
@@ -118,6 +123,12 @@ export default function App() {
     seed: tr.sourceSeed,
   };
 
+  // Gate: not logged in → show only the login page. All hooks above run
+  // unconditionally, so this early return doesn't break the rules of hooks.
+  if (!authed) {
+    return <LoginPage lang={lang} onLogin={() => setAuthed(true)} />;
+  }
+
   return (
     <div className="min-h-screen">
       <header className="sticky top-0 z-30 border-b border-line/60 bg-ink/80 backdrop-blur">
@@ -138,18 +149,29 @@ export default function App() {
               )}
             </TabBtn>
           </nav>
-          <div className="flex items-center gap-1 rounded-full border border-line bg-panel2 p-0.5 text-xs">
-            {(["ru", "en"] as Lang[]).map((l) => (
-              <button
-                key={l}
-                onClick={() => setLang(l)}
-                className={`rounded-full px-2.5 py-1 font-medium uppercase ${
-                  lang === l ? "bg-brand text-white" : "text-muted hover:text-text"
-                }`}
-              >
-                {l}
-              </button>
-            ))}
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 rounded-full border border-line bg-panel2 p-0.5 text-xs">
+              {(["ru", "en"] as Lang[]).map((l) => (
+                <button
+                  key={l}
+                  onClick={() => setLang(l)}
+                  className={`rounded-full px-2.5 py-1 font-medium uppercase ${
+                    lang === l ? "bg-brand text-white" : "text-muted hover:text-text"
+                  }`}
+                >
+                  {l}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={() => {
+                logout();
+                setAuthed(false);
+              }}
+              className="rounded-full border border-line px-3 py-1 text-xs font-medium text-muted hover:text-text"
+            >
+              {tr.logout}
+            </button>
           </div>
         </div>
       </header>
